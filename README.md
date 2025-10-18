@@ -18,5 +18,9 @@
             - check version.
 
 3. Install Docker Desktop for Mac
-brew install --cask docker
+        brew install --cask docker
 
+4. Install Terraform
+        brew tap hashicorp/tap
+        brew install hashicorp/tap/terraform
+        terraform --version
