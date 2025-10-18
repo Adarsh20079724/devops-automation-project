@@ -3,6 +3,8 @@
 1. Installed homebrew :
     Command : /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
     Information taken from official homebrew website.
+    
+    # What is home brew? 
 
 2. Installed Git :
 
@@ -15,5 +17,6 @@
             - brew update
             - check version.
 
-
+3. Install Docker Desktop for Mac
+brew install --cask docker
 
