@@ -24,3 +24,7 @@
         brew tap hashicorp/tap
         brew install hashicorp/tap/terraform
         terraform --version
+        
+5. Install Ansible
+        brew install ansible
+        ansible --version
