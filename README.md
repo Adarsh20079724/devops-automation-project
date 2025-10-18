@@ -24,7 +24,15 @@
         brew tap hashicorp/tap
         brew install hashicorp/tap/terraform
         terraform --version
-        
+
 5. Install Ansible
         brew install ansible
         ansible --version
+
+6. Install AWS CLI (if using AWS)
+        brebrew install awscli
+        aws --version
+
+7. Install Python 3 (required for Ansible)
+        brew install python3
+        python3 --version
