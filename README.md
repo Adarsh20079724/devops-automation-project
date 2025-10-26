@@ -36,3 +36,5 @@
 7. Install Python 3 (required for Ansible)
         brew install python3
         python3 --version
+
+8. Installed Node and npm
