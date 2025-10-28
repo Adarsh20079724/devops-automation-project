@@ -1,4 +1,5 @@
 # Data source for latest Amazon Linux 2 AMI
+
 data "aws_ami" "amazon_linux_2" {
   most_recent = true
   owners      = ["amazon"]
@@ -15,6 +16,7 @@ data "aws_ami" "amazon_linux_2" {
 }
 
 # EC2 Instance
+
 resource "aws_instance" "app_server" {
   ami                    = data.aws_ami.amazon_linux_2.id
   instance_type          = var.instance_type
