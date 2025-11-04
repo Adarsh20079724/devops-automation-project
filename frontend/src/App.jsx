@@ -4,15 +4,22 @@ const App = () => {
   const [message, setMessage] = useState('Loading...')
   const [count, setCount] = useState(0)
 
+  const fetchData = async () => {
+    try{
+    const response = await fetch('http://localhost:3000/api/hello');
+    const data = await response.json();
+
+    setMessage(data)
+    }
+    catch(err) {
+      console.error('Error:', err)
+        setMessage('Error connecting to backend')
+    }
+  }
+
   useEffect(() => {
     // Fetch message from backend
-    fetch('/api/hello')
-      .then(response => response.json())
-      .then(data => setMessage(data.message))
-      .catch(error => {
-        console.error('Error:', error)
-        setMessage('Error connecting to backend')
-      })
+    fetchData();
   }, [])
 
   return (
