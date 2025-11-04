@@ -1,13 +1,17 @@
 const express = require('express');
+const cors = require('cors')
 const path = require('path');
 const app = express();
 
 const PORT = process.env.PORT || 3000;
 
+app.use(cors())
+app.use(express.json())
+
 // API endpoint
 app.get('/api/hello', (req, res) => {
   res.json({ 
-    message: '👋 Hello from Express Backend running on AWS!',
+    message: 'Hello from Express Backend running on AWS!',
     timestamp: new Date().toISOString(),
     environment: process.env.NODE_ENV || 'development'
   });
@@ -31,7 +35,7 @@ app.get('*', (req, res) => {
 });
 
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚀 Server is running on port ${PORT}`);
-  console.log(`📍 Environment: ${process.env.NODE_ENV || 'development'}`);
-  console.log(`🏥 Health check: http://localhost:${PORT}/api/health`);
+  console.log(`Server is running on port ${PORT}`);
+  console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
+  console.log(`Health check: http://localhost:${PORT}/api/health`);
 });
