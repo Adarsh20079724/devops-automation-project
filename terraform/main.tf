@@ -7,6 +7,15 @@ terraform {
     }
   }
   required_version = ">= 1.0"
+  
+  # Backend for remote state (uncomment for production)
+  # backend "s3" {
+  #   bucket         = "your-terraform-state-bucket"
+  #   key            = "hello-world-devops/terraform.tfstate"
+  #   region         = "us-east-1"
+  #   encrypt        = true
+  #   dynamodb_table = "terraform-state-lock"
+  # }
 }
 
 provider "aws" {
@@ -75,7 +84,7 @@ resource "aws_security_group" "app_sg" {
   }
 }
 
-# User data script to install Docker and run the app
+# User data script to install Docker and Git
 locals {
   user_data = <<-EOF
     #!/bin/bash
@@ -90,21 +99,22 @@ locals {
     systemctl enable docker
     usermod -a -G docker ec2-user
     
+    # Install Git
+    yum install -y git
+    
     # Install Docker Compose
     curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
     chmod +x /usr/local/bin/docker-compose
     
     # Create app directory
     mkdir -p /home/ec2-user/app
-    cd /home/ec2-user/app
+    chown -R ec2-user:ec2-user /home/ec2-user/app
     
     # Log installation
-    echo "Docker installed successfully" > /var/log/user-data.log
-    echo "Ready to deploy application" >> /var/log/user-data.log
+    echo "Docker and Git installed successfully" > /var/log/user-data.log
+    echo "Ready for git-based deployment" >> /var/log/user-data.log
     
-    # Note: You'll need to deploy your Docker image manually or via CI/CD
-    # Example: docker pull your-dockerhub-username/hello-world-devops:latest
-    # Example: docker run -d -p 3000:3000 your-dockerhub-username/hello-world-devops:latest
+    # Repository will be cloned during first deployment
   EOF
 }
 

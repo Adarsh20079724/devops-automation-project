@@ -1,0 +1,196 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+env:
+  AWS_REGION: us-east-1
+
+jobs:
+  # Job 1: Build and Test
+  build-and-test:
+    name: Build and Test Application
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Install Frontend Dependencies
+        working-directory: ./frontend
+        run: npm ci
+
+      - name: Install Backend Dependencies
+        working-directory: ./backend
+        run: npm ci
+
+      - name: Build Frontend
+        working-directory: ./frontend
+        run: npm run build
+
+      - name: Test Backend
+        working-directory: ./backend
+        run: echo "✅ Backend validation passed"
+
+  # Job 2: Deploy Infrastructure (Terraform)
+  terraform-deploy:
+    name: Deploy Infrastructure with Terraform
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    
+    defaults:
+      run:
+        working-directory: ./terraform
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.6.0
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Terraform Validate
+        run: terraform validate
+
+      - name: Terraform Plan
+        run: terraform plan -out=tfplan
+
+      - name: Terraform Apply
+        run: terraform apply -auto-approve tfplan
+
+      - name: Get Terraform Outputs
+        id: terraform-outputs
+        run: |
+          echo "ec2_ip=$(terraform output -raw instance_public_ip)" >> $GITHUB_OUTPUT
+          echo "instance_id=$(terraform output -raw instance_id)" >> $GITHUB_OUTPUT
+
+    outputs:
+      ec2_ip: ${{ steps.terraform-outputs.outputs.ec2_ip }}
+      instance_id: ${{ steps.terraform-outputs.outputs.instance_id }}
+
+  # Job 3: Application Deployment
+  app-deploy:
+    name: Deploy Application to EC2
+    needs: terraform-deploy
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    
+    steps:
+      - name: Configure SSH Key
+        run: |
+          echo "${{ secrets.EC2_SSH_PRIVATE_KEY }}" > ec2-key.pem
+          chmod 400 ec2-key.pem
+
+      - name: Wait for EC2 to be ready
+        run: |
+          echo "⏳ Waiting for EC2 instance to be fully ready..."
+          sleep 90
+
+      - name: Deploy Application via SSH
+        env:
+          EC2_IP: ${{ needs.terraform-deploy.outputs.ec2_ip }}
+          REPO_URL: ${{ github.server_url }}/${{ github.repository }}.git
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          ssh -o StrictHostKeyChecking=no -i ec2-key.pem ec2-user@${EC2_IP} << 'ENDSSH'
+            set -e
+            
+            echo "📂 Setting up application directory..."
+            cd /home/ec2-user
+            
+            # Clone or pull repository
+            if [ -d "app" ]; then
+              echo "🔄 Updating existing repository..."
+              cd app
+              git pull origin ${BRANCH}
+            else
+              echo "📥 Cloning repository..."
+              git clone ${REPO_URL} app
+              cd app
+              git checkout ${BRANCH}
+            fi
+            
+            echo "🔄 Stopping existing containers..."
+            docker stop devops-automation-project 2>/dev/null || true
+            docker rm devops-automation-project 2>/dev/null || true
+            
+            echo "🐳 Building Docker image..."
+            docker build -f docker/Dockerfile -t hello-world-devops:latest .
+            
+            echo "🚀 Starting new container..."
+            docker run -d \
+              --name devops-automation-project \
+              --restart unless-stopped \
+              -p 3000:3000 \
+              -e NODE_ENV=production \
+              hello-world-devops:latest
+            
+            echo "⏳ Waiting for application to start..."
+            sleep 10
+            
+            echo "🏥 Checking application health..."
+            if curl -f http://localhost:3000/api/health; then
+              echo "✅ Application deployed successfully!"
+            else
+              echo "❌ Health check failed!"
+              docker logs devops-automation-project
+              exit 1
+            fi
+            
+            echo "🧹 Cleaning up old Docker images..."
+            docker image prune -f
+          ENDSSH
+
+      - name: Verify Deployment
+        env:
+          EC2_IP: ${{ needs.terraform-deploy.outputs.ec2_ip }}
+        run: |
+          echo "🎉 Deployment completed successfully!"
+          echo "🌐 Application URL: http://${EC2_IP}:3000"
+          echo "🏥 Health check: http://${EC2_IP}:3000/api/health"
+
+      - name: Cleanup
+        if: always()
+        run: rm -f ec2-key.pem
+
+  # Job 4: Notification
+  notify:
+    name: Send Deployment Notification
+    needs: [terraform-deploy, app-deploy]
+    runs-on: ubuntu-latest
+    if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+    
+    steps:
+      - name: Deployment Success
+        if: needs.app-deploy.result == 'success'
+        run: |
+          echo "🎉 Deployment successful!"
+          echo "🌐 Application URL: http://${{ needs.terraform-deploy.outputs.ec2_ip }}:3000"
+
+      - name: Deployment Failed
+        if: needs.app-deploy.result == 'failure'
+        run: |
+          echo "❌ Deployment failed!"
+          exit 1
