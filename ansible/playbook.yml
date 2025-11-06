@@ -1,0 +1,26 @@
+---
+- name: DevOps Automation - Infrastructure and Deployment
+  hosts: localhost
+  connection: local
+  gather_facts: no
+  
+  tasks:
+    - name: Provision Infrastructure
+      include_role:
+        name: infrastructure
+
+    - name: Add EC2 instance to inventory
+      add_host:
+        name: "{{ instance_ip }}"
+        groups: devops_servers
+        ansible_host: "{{ instance_ip }}"
+        ansible_user: ubuntu
+        ansible_ssh_private_key_file: ~/.ssh/devops-automation-key
+
+- name: Deploy Application
+  hosts: devops_servers
+  gather_facts: yes
+  become: yes
+  
+  roles:
+    - deploy

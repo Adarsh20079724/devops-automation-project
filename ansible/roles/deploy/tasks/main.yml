@@ -1,0 +1,67 @@
+---
+- name: Ensure app directory exists
+  file:
+    path: "{{ app_directory }}"
+    state: directory
+    owner: ubuntu
+    group: ubuntu
+    mode: '0755'
+
+- name: Remove old application code
+  file:
+    path: "{{ app_directory }}/devops-automation-project"
+    state: absent
+
+- name: Clone application repository
+  git:
+    repo: "https://github.com/{{ git_repo }}.git"
+    dest: "{{ app_directory }}/devops-automation-project"
+    version: main
+    force: yes
+  become: yes
+  become_user: ubuntu
+
+- name: Stop existing Docker containers
+  community.docker.docker_compose:
+    project_src: "{{ app_directory }}/devops-automation-project"
+    state: absent
+  ignore_errors: yes
+
+- name: Prune Docker system
+  community.docker.docker_prune:
+    containers: yes
+    images: yes
+    networks: yes
+    volumes: yes
+    builder_cache: yes
+
+- name: Build and start Docker containers
+  community.docker.docker_compose:
+    project_src: "{{ app_directory }}/devops-automation-project"
+    build: yes
+    pull: yes
+    state: present
+  register: docker_output
+
+- name: Wait for application to start
+  wait_for:
+    host: "{{ ansible_host }}"
+    port: "{{ app_port }}"
+    delay: 10
+    timeout: 60
+
+- name: Check application health
+  uri:
+    url: "http://{{ ansible_host }}/health"
+    status_code: 200
+  register: health_check
+  retries: 10
+  delay: 5
+  until: health_check.status == 200
+
+- name: Display deployment status
+  debug:
+    msg:
+      - "✅ Deployment successful!"
+      - "Application URL: http://{{ ansible_host }}"
+      - "Health Check: http://{{ ansible_host }}/health"
