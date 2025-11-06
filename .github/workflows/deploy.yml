@@ -8,7 +8,6 @@ on:
 
 env:
   AWS_REGION: eu-north-1
-  TF_VAR_create_new_resources: "false"
 
 jobs:
   deploy:
@@ -58,6 +57,8 @@ jobs:
           if [ "$SG_ID" != "" ] && [ "$SG_ID" != "None" ]; then
             echo "📥 Importing security group: $SG_ID"
             terraform import aws_security_group.app_sg "$SG_ID" || true
+          else
+            echo "ℹ️  No existing security group found"
           fi
           
           # Import key pair if exists
@@ -70,31 +71,23 @@ jobs:
           if [ "$KEY_EXISTS" == "devops-automation-key" ]; then
             echo "📥 Importing key pair"
             terraform import aws_key_pair.app_key devops-automation-key || true
+          else
+            echo "ℹ️  No existing key pair found"
           fi
           
           # Import EC2 instance if exists
           INSTANCE_ID=$(aws ec2 describe-instances \
             --region ${{ env.AWS_REGION }} \
-            --filters "Name=tag:Name,Values=devops-automation-server" "Name=instance-state-name,Values=running" \
+            --filters "Name=tag:Name,Values=devops-automation-server" "Name=instance-state-name,Values=running,pending,stopping,stopped" \
             --query 'Reservations[0].Instances[0].InstanceId' \
             --output text 2>/dev/null || echo "")
           
           if [ "$INSTANCE_ID" != "" ] && [ "$INSTANCE_ID" != "None" ]; then
             echo "📥 Importing EC2 instance: $INSTANCE_ID"
             terraform import aws_instance.app_server "$INSTANCE_ID" || true
+          else
+            echo "ℹ️  No existing EC2 instance found"
           fi
-          
-          # # Import Elastic IP if exists
-          # EIP_ALLOCATION=$(aws ec2 describe-addresses \
-          #   --region ${{ env.AWS_REGION }} \
-          #   --filters "Name=tag:Name,Values=devops-automation-eip" \
-          #   --query 'Addresses[0].AllocationId' \
-          #   --output text 2>/dev/null || echo "")
-          
-          # if [ "$EIP_ALLOCATION" != "" ] && [ "$EIP_ALLOCATION" != "None" ]; then
-          #   echo "📥 Importing Elastic IP: $EIP_ALLOCATION"
-          #   terraform import aws_eip.app_eip "$EIP_ALLOCATION" || true
-          # fi
 
       - name: Terraform Plan
         working-directory: ./terraform
@@ -113,28 +106,130 @@ jobs:
           echo "EC2_IP=$INSTANCE_IP" >> $GITHUB_ENV
           echo "✅ Instance IP: $INSTANCE_IP"
 
-      - name: Wait for EC2 SSH to be ready
+      - name: Configure SSH
         run: |
-          echo "⏳ Waiting for SSH to be available..."
-          for i in {1..30}; do
-            if ssh -i ~/.ssh/devops-automation-key -o StrictHostKeyChecking=no -o ConnectTimeout=5 ubuntu@${{ steps.get_ip.outputs.instance_ip }} "echo 'SSH Ready'" 2>/dev/null; then
-              echo "✅ SSH is ready!"
-              break
+          # Create SSH config for easier connection
+          cat > ~/.ssh/config << EOF
+          Host devops-server
+            HostName ${{ steps.get_ip.outputs.instance_ip }}
+            User ubuntu
+            IdentityFile ~/.ssh/devops-automation-key
+            StrictHostKeyChecking no
+            UserKnownHostsFile /dev/null
+            ServerAliveInterval 30
+            ServerAliveCountMax 10
+            ConnectTimeout 10
+          EOF
+          
+          chmod 600 ~/.ssh/config
+          
+          echo "SSH config created successfully"
+
+      - name: Wait for EC2 to be Ready
+        run: |
+          echo "⏳ Waiting for EC2 instance to be fully ready..."
+          
+          INSTANCE_IP="${{ steps.get_ip.outputs.instance_ip }}"
+          echo "Instance IP: $INSTANCE_IP"
+          
+          # Wait for instance to be in running state
+          echo "Checking instance status..."
+          aws ec2 wait instance-running \
+            --region ${{ env.AWS_REGION }} \
+            --filters "Name=tag:Name,Values=devops-automation-server" 2>/dev/null || true
+          
+          echo "✅ Instance is in running state"
+          
+          # Additional wait for system to boot and cloud-init to start
+          echo "Waiting 90 seconds for system to boot..."
+          sleep 90
+          
+          # Test SSH connection with retries
+          echo "Testing SSH connection..."
+          MAX_ATTEMPTS=40
+          ATTEMPT=0
+          
+          while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
+            ATTEMPT=$((ATTEMPT + 1))
+            echo "Attempt $ATTEMPT/$MAX_ATTEMPTS"
+            
+            if timeout 15 ssh -i ~/.ssh/devops-automation-key \
+               -o StrictHostKeyChecking=no \
+               -o UserKnownHostsFile=/dev/null \
+               -o ConnectTimeout=10 \
+               -o BatchMode=yes \
+               ubuntu@$INSTANCE_IP "echo 'SSH Connection Successful'" 2>&1; then
+              echo "✅ SSH connection established!"
+              
+              # Wait for cloud-init to complete
+              echo "Waiting for cloud-init to complete..."
+              ssh -i ~/.ssh/devops-automation-key \
+                  -o StrictHostKeyChecking=no \
+                  -o UserKnownHostsFile=/dev/null \
+                  ubuntu@$INSTANCE_IP \
+                  "timeout 300 cloud-init status --wait || echo 'Cloud-init timeout, but continuing'" 2>&1 || true
+              
+              echo "✅ EC2 instance is ready for deployment!"
+              exit 0
             else
-              echo "Attempt $i/30: SSH not ready, waiting 10 seconds..."
-              sleep 10
+              echo "SSH not ready yet, waiting 15 seconds..."
+              sleep 15
             fi
           done
+          
+          # If we reach here, SSH connection failed
+          echo "❌ Failed to establish SSH connection after $MAX_ATTEMPTS attempts"
+          
+          # Display debugging information
+          echo ""
+          echo "=== DEBUGGING INFORMATION ==="
+          echo "Instance IP: $INSTANCE_IP"
+          echo ""
+          
+          echo "=== Instance Status ==="
+          aws ec2 describe-instances \
+            --region ${{ env.AWS_REGION }} \
+            --filters "Name=tag:Name,Values=devops-automation-server" \
+            --query 'Reservations[0].Instances[0].[InstanceId,State.Name,PublicIpAddress,PrivateIpAddress]' \
+            --output table || echo "Failed to get instance status"
+          
+          echo ""
+          echo "=== Security Group Rules (Port 22) ==="
+          aws ec2 describe-security-groups \
+            --region ${{ env.AWS_REGION }} \
+            --filters "Name=group-name,Values=devops-automation-sg" \
+            --query 'SecurityGroups[0].IpPermissions[?FromPort==`22`]' \
+            --output table || echo "Failed to get security group rules"
+          
+          echo ""
+          echo "=== System Log (last 50 lines) ==="
+          aws ec2 get-console-output \
+            --region ${{ env.AWS_REGION }} \
+            --instance-id $(aws ec2 describe-instances \
+              --region ${{ env.AWS_REGION }} \
+              --filters "Name=tag:Name,Values=devops-automation-server" \
+              --query 'Reservations[0].Instances[0].InstanceId' \
+              --output text) \
+            --output text --query 'Output' 2>/dev/null | tail -50 || echo "Failed to get console output"
+          
+          exit 1
 
       - name: Setup Ansible
         run: |
-          sudo apt-get update
+          echo "Installing Ansible..."
+          sudo apt-get update -qq
           sudo apt-get install -y ansible
           ansible --version
+          echo "✅ Ansible installed successfully"
 
-      - name: Add EC2 to known hosts
+      - name: Test Ansible Connection
+        working-directory: ./ansible
+        env:
+          EC2_IP: ${{ steps.get_ip.outputs.instance_ip }}
+          ANSIBLE_HOST_KEY_CHECKING: "False"
         run: |
-          ssh-keyscan -H ${{ steps.get_ip.outputs.instance_ip }} >> ~/.ssh/known_hosts
+          echo "Testing Ansible connection..."
+          ansible all -i inventory.yml -m ping -v
 
       - name: Run Ansible Playbook
         working-directory: ./ansible
@@ -143,41 +238,118 @@ jobs:
           GITHUB_REPOSITORY: ${{ github.repository }}
           ANSIBLE_HOST_KEY_CHECKING: "False"
         run: |
+          echo "Starting Ansible deployment..."
           ansible-playbook deploy-playbook.yml -i inventory.yml -v
 
       - name: Verify Deployment
         run: |
           echo "🔍 Verifying deployment..."
           
-          for i in {1..10}; do
-            HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://${{ steps.get_ip.outputs.instance_ip }}/health || echo "000")
+          INSTANCE_IP="${{ steps.get_ip.outputs.instance_ip }}"
+          
+          # Wait a bit for application to start
+          echo "Waiting 30 seconds for application to start..."
+          sleep 30
+          
+          # Test health endpoint
+          MAX_ATTEMPTS=10
+          ATTEMPT=0
+          
+          while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
+            ATTEMPT=$((ATTEMPT + 1))
+            echo "Health check attempt $ATTEMPT/$MAX_ATTEMPTS"
+            
+            HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://$INSTANCE_IP/health 2>/dev/null || echo "000")
             
             if [ "$HTTP_STATUS" = "200" ]; then
               echo "✅ Application is healthy!"
+              echo "✅ Health check passed with status code 200"
+              
+              # Test main page
+              MAIN_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://$INSTANCE_IP/ 2>/dev/null || echo "000")
+              if [ "$MAIN_STATUS" = "200" ]; then
+                echo "✅ Main page is accessible!"
+              else
+                echo "⚠️  Main page returned status: $MAIN_STATUS"
+              fi
+              
               exit 0
             else
-              echo "⏳ Attempt $i/10: Health check returned $HTTP_STATUS"
-              sleep 5
+              echo "⏳ Health check returned status: $HTTP_STATUS, waiting 10 seconds..."
+              sleep 10
             fi
           done
           
-          echo "⚠️ Health check failed"
+          # If we reach here, health check failed
+          echo "⚠️  Health check failed after $MAX_ATTEMPTS attempts"
+          echo "Application may still be starting. Manual verification recommended."
+          
+          # Get container logs for debugging
+          echo ""
+          echo "=== Container Logs (last 50 lines) ==="
+          ssh -i ~/.ssh/devops-automation-key \
+              -o StrictHostKeyChecking=no \
+              -o UserKnownHostsFile=/dev/null \
+              ubuntu@$INSTANCE_IP \
+              "docker logs devops-app --tail 50" 2>&1 || echo "Failed to get container logs"
+          
           exit 1
 
       - name: Deployment Summary
         if: always()
         run: |
+          INSTANCE_IP="${{ steps.get_ip.outputs.instance_ip }}"
+          
           echo "## 🚀 Deployment Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "✅ Infrastructure provisioned with Terraform" >> $GITHUB_STEP_SUMMARY
-          echo "✅ Application deployed with Ansible" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "${{ job.status }}" == "success" ]; then
+            echo "### ✅ Deployment Successful!" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "### ⚠️ Deployment Completed with Issues" >> $GITHUB_STEP_SUMMARY
+          fi
+          
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### 🌐 Access Information" >> $GITHUB_STEP_SUMMARY
-          echo "- **Application URL:** http://${{ steps.get_ip.outputs.instance_ip }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Health Check:** http://${{ steps.get_ip.outputs.instance_ip }}/health" >> $GITHUB_STEP_SUMMARY
+          echo "- **Application URL:** [http://$INSTANCE_IP](http://$INSTANCE_IP)" >> $GITHUB_STEP_SUMMARY
+          echo "- **Health Check:** [http://$INSTANCE_IP/health](http://$INSTANCE_IP/health)" >> $GITHUB_STEP_SUMMARY
+          echo "- **Instance IP:** \`$INSTANCE_IP\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
+          
           echo "### 🛠️ Technologies Used" >> $GITHUB_STEP_SUMMARY
-          echo "- **Terraform:** Infrastructure provisioning" >> $GITHUB_STEP_SUMMARY
-          echo "- **Ansible:** Configuration management & deployment" >> $GITHUB_STEP_SUMMARY
+          echo "- **Terraform:** Infrastructure provisioning (EC2, Security Groups)" >> $GITHUB_STEP_SUMMARY
+          echo "- **Ansible:** Configuration management & application deployment" >> $GITHUB_STEP_SUMMARY
           echo "- **Docker:** Application containerization" >> $GITHUB_STEP_SUMMARY
           echo "- **Nginx:** Web server" >> $GITHUB_STEP_SUMMARY
+          echo "- **GitHub Actions:** CI/CD automation" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          echo "### 📝 Quick Commands" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
+          echo "# SSH into server" >> $GITHUB_STEP_SUMMARY
+          echo "ssh -i ~/.ssh/devops-automation-key ubuntu@$INSTANCE_IP" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "# Check container status" >> $GITHUB_STEP_SUMMARY
+          echo "docker ps" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "# View container logs" >> $GITHUB_STEP_SUMMARY
+          echo "docker logs devops-app" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "# Restart application" >> $GITHUB_STEP_SUMMARY
+          echo "cd /home/ubuntu/app/devops-automation-project && docker compose restart" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          echo "### 📊 Deployment Details" >> $GITHUB_STEP_SUMMARY
+          echo "- **Commit:** \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Branch:** \`${{ github.ref_name }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Triggered by:** ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Workflow run:** [#${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})" >> $GITHUB_STEP_SUMMARY
+          echo "- **Timestamp:** $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_STEP_SUMMARY
+
+      - name: Cleanup on Failure
+        if: failure()
+        run: |
+          echo "⚠️ Deployment failed. Keeping resources for debugging."
+          echo "To destroy infrastructure manually, run:"
+          echo "cd terraform && terraform destroy -var=\"public_key=\$(cat ~/.ssh/devops-automation-key.pub)\""
