@@ -84,17 +84,17 @@ jobs:
             terraform import aws_instance.app_server "$INSTANCE_ID" || true
           fi
           
-          # Import Elastic IP if exists
-          EIP_ALLOCATION=$(aws ec2 describe-addresses \
-            --region ${{ env.AWS_REGION }} \
-            --filters "Name=tag:Name,Values=devops-automation-eip" \
-            --query 'Addresses[0].AllocationId' \
-            --output text 2>/dev/null || echo "")
+          # # Import Elastic IP if exists
+          # EIP_ALLOCATION=$(aws ec2 describe-addresses \
+          #   --region ${{ env.AWS_REGION }} \
+          #   --filters "Name=tag:Name,Values=devops-automation-eip" \
+          #   --query 'Addresses[0].AllocationId' \
+          #   --output text 2>/dev/null || echo "")
           
-          if [ "$EIP_ALLOCATION" != "" ] && [ "$EIP_ALLOCATION" != "None" ]; then
-            echo "📥 Importing Elastic IP: $EIP_ALLOCATION"
-            terraform import aws_eip.app_eip "$EIP_ALLOCATION" || true
-          fi
+          # if [ "$EIP_ALLOCATION" != "" ] && [ "$EIP_ALLOCATION" != "None" ]; then
+          #   echo "📥 Importing Elastic IP: $EIP_ALLOCATION"
+          #   terraform import aws_eip.app_eip "$EIP_ALLOCATION" || true
+          # fi
 
       - name: Terraform Plan
         working-directory: ./terraform
