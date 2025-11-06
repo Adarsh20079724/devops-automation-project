@@ -19,7 +19,7 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ secrets.AWS_REGION || 'us-east-1' }}
+          aws-region: ${{ secrets.AWS_REGION || 'eu-north-1' }}
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v2
@@ -36,14 +36,14 @@ jobs:
         run: terraform plan
         env:
           TF_VAR_key_name: ${{ secrets.AWS_KEY_NAME }}
-          TF_VAR_aws_region: ${{ secrets.AWS_REGION || 'us-east-1' }}
+          TF_VAR_aws_region: ${{ secrets.AWS_REGION || 'eu-north-1' }}
 
       - name: Terraform Apply
         working-directory: ./terraform
         run: terraform apply -auto-approve
         env:
           TF_VAR_key_name: ${{ secrets.AWS_KEY_NAME }}
-          TF_VAR_aws_region: ${{ secrets.AWS_REGION || 'us-east-1' }}
+          TF_VAR_aws_region: ${{ secrets.AWS_REGION || 'eu-north-1' }}
 
       - name: Get EC2 IP
         id: ec2_ip
