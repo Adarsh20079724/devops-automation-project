@@ -40,3 +40,5 @@
 8. Installed Node and npm
 
 .
+
+Before this commit Application was successfully deployed to Aws and is working.
