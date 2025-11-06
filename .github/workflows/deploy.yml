@@ -1,4 +1,4 @@
-name: Deploy to AWS EC2
+name: Deploy with Terraform + Ansible
 
 on:
   push:
@@ -8,13 +8,12 @@ on:
 
 env:
   AWS_REGION: eu-north-1
+  TF_VAR_create_new_resources: "false"
 
 jobs:
-  terraform:
-    name: Provision Infrastructure
+  deploy:
+    name: Deploy Application
     runs-on: ubuntu-latest
-    outputs:
-      instance_ip: ${{ steps.terraform_output.outputs.instance_ip }}
     
     steps:
       - name: Checkout code
@@ -33,28 +32,69 @@ jobs:
           terraform_version: 1.6.0
           terraform_wrapper: false
 
+      - name: Setup SSH Key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/devops-automation-key
+          chmod 600 ~/.ssh/devops-automation-key
+
       - name: Terraform Init
         working-directory: ./terraform
         run: terraform init
 
-      - name: Import Existing Resources
+      - name: Check and Import Existing Resources
         working-directory: ./terraform
         continue-on-error: true
         run: |
-          # Try to import existing security group
+          echo "🔍 Checking for existing resources..."
+          
+          # Import security group if exists
           SG_ID=$(aws ec2 describe-security-groups \
             --region ${{ env.AWS_REGION }} \
             --filters "Name=group-name,Values=devops-automation-sg" \
             --query 'SecurityGroups[0].GroupId' \
             --output text 2>/dev/null || echo "")
-    
+          
           if [ "$SG_ID" != "" ] && [ "$SG_ID" != "None" ]; then
-            echo "Importing existing security group: $SG_ID"
+            echo "📥 Importing security group: $SG_ID"
             terraform import aws_security_group.app_sg "$SG_ID" || true
           fi
-    
-          # Try to import existing key pair
-          terraform import aws_key_pair.app_key devops-automation-key || true
+          
+          # Import key pair if exists
+          KEY_EXISTS=$(aws ec2 describe-key-pairs \
+            --region ${{ env.AWS_REGION }} \
+            --key-names devops-automation-key \
+            --query 'KeyPairs[0].KeyName' \
+            --output text 2>/dev/null || echo "")
+          
+          if [ "$KEY_EXISTS" == "devops-automation-key" ]; then
+            echo "📥 Importing key pair"
+            terraform import aws_key_pair.app_key devops-automation-key || true
+          fi
+          
+          # Import EC2 instance if exists
+          INSTANCE_ID=$(aws ec2 describe-instances \
+            --region ${{ env.AWS_REGION }} \
+            --filters "Name=tag:Name,Values=devops-automation-server" "Name=instance-state-name,Values=running" \
+            --query 'Reservations[0].Instances[0].InstanceId' \
+            --output text 2>/dev/null || echo "")
+          
+          if [ "$INSTANCE_ID" != "" ] && [ "$INSTANCE_ID" != "None" ]; then
+            echo "📥 Importing EC2 instance: $INSTANCE_ID"
+            terraform import aws_instance.app_server "$INSTANCE_ID" || true
+          fi
+          
+          # Import Elastic IP if exists
+          EIP_ALLOCATION=$(aws ec2 describe-addresses \
+            --region ${{ env.AWS_REGION }} \
+            --filters "Name=tag:Name,Values=devops-automation-eip" \
+            --query 'Addresses[0].AllocationId' \
+            --output text 2>/dev/null || echo "")
+          
+          if [ "$EIP_ALLOCATION" != "" ] && [ "$EIP_ALLOCATION" != "None" ]; then
+            echo "📥 Importing Elastic IP: $EIP_ALLOCATION"
+            terraform import aws_eip.app_eip "$EIP_ALLOCATION" || true
+          fi
 
       - name: Terraform Plan
         working-directory: ./terraform
@@ -64,150 +104,80 @@ jobs:
         working-directory: ./terraform
         run: terraform apply -auto-approve -var="public_key=${{ secrets.SSH_PUBLIC_KEY }}"
 
-      - name: Get Terraform Outputs
-        id: terraform_output
+      - name: Get EC2 Instance IP
+        id: get_ip
         working-directory: ./terraform
         run: |
           INSTANCE_IP=$(terraform output -raw instance_public_ip)
           echo "instance_ip=$INSTANCE_IP" >> $GITHUB_OUTPUT
-          echo "Instance IP: $INSTANCE_IP"
+          echo "EC2_IP=$INSTANCE_IP" >> $GITHUB_ENV
+          echo "✅ Instance IP: $INSTANCE_IP"
 
-  deploy:
-    name: Deploy Application
-    needs: terraform
-    runs-on: ubuntu-latest
-    
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Wait for EC2 Initial Boot
+      - name: Wait for EC2 SSH to be ready
         run: |
-          echo "Waiting 180 seconds for EC2 instance to boot..."
-          sleep 180
-
-      - name: Setup SSH
-        run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/devops-automation-key
-          chmod 600 ~/.ssh/devops-automation-key
-          ssh-keyscan -H ${{ needs.terraform.outputs.instance_ip }} >> ~/.ssh/known_hosts
-
-      - name: Wait for EC2 Initialization to Complete
-        env:
-          INSTANCE_IP: ${{ needs.terraform.outputs.instance_ip }}
-        run: |
-          echo "Checking if EC2 initialization is complete..."
-          
-          # Wait for cloud-init to finish
+          echo "⏳ Waiting for SSH to be available..."
           for i in {1..30}; do
-            echo "Attempt $i/30: Checking cloud-init status..."
-            
-            STATUS=$(ssh -i ~/.ssh/devops-automation-key -o StrictHostKeyChecking=no -o ConnectTimeout=10 ubuntu@$INSTANCE_IP \
-              "cloud-init status 2>/dev/null || echo 'not-ready'" || echo "ssh-failed")
-            
-            echo "Status: $STATUS"
-            
-            if [[ "$STATUS" == *"done"* ]] || [[ "$STATUS" == *"disabled"* ]]; then
-              echo "✅ Cloud-init completed!"
-              break
-            elif [ "$i" -eq 30 ]; then
-              echo "⚠️ Cloud-init still running, but proceeding..."
+            if ssh -i ~/.ssh/devops-automation-key -o StrictHostKeyChecking=no -o ConnectTimeout=5 ubuntu@${{ steps.get_ip.outputs.instance_ip }} "echo 'SSH Ready'" 2>/dev/null; then
+              echo "✅ SSH is ready!"
               break
             else
-              echo "⏳ Still initializing, waiting 20 seconds..."
-              sleep 20
-            fi
-          done
-          
-          # Verify Docker is installed
-          echo "Verifying Docker installation..."
-          for i in {1..10}; do
-            if ssh -i ~/.ssh/devops-automation-key -o StrictHostKeyChecking=no ubuntu@$INSTANCE_IP "docker --version" 2>/dev/null; then
-              echo "✅ Docker is ready!"
-              break
-            else
-              echo "⏳ Docker not ready yet, waiting 15 seconds..."
-              sleep 15
-            fi
-          done
-          
-          # Verify Git is installed
-          if ssh -i ~/.ssh/devops-automation-key -o StrictHostKeyChecking=no ubuntu@$INSTANCE_IP "git --version" 2>/dev/null; then
-            echo "✅ Git is ready!"
-          else
-            echo "❌ Git not found!"
-            exit 1
-          fi
-
-      - name: Deploy to EC2
-        env:
-          INSTANCE_IP: ${{ needs.terraform.outputs.instance_ip }}
-        run: |
-          ssh -i ~/.ssh/devops-automation-key -o StrictHostKeyChecking=no ubuntu@$INSTANCE_IP << 'EOF'
-            set -e  # Exit on any error
-            
-            echo "📁 Creating app directory..."
-            mkdir -p /home/ubuntu/app
-            cd /home/ubuntu/app
-            
-            echo "🗑️ Removing old code..."
-            rm -rf devops-automation-project
-            
-            echo "📥 Cloning repository..."
-            git clone https://github.com/${{ github.repository }}.git
-            cd devops-automation-project
-            
-            echo "🐳 Stopping old containers..."
-            docker compose down 2>/dev/null || true
-            
-            echo "🧹 Cleaning Docker resources..."
-            docker system prune -af
-            
-            echo "🏗️ Building and starting containers..."
-            docker compose up -d --build
-            
-            echo "⏳ Waiting for containers to start..."
-            sleep 20
-            
-            echo "📊 Container status:"
-            docker ps
-            
-            echo "📝 Container logs:"
-            docker logs devops-app --tail 50 || true
-            
-            echo "✅ Deployment completed!"
-          EOF
-
-      - name: Verify Deployment
-        env:
-          INSTANCE_IP: ${{ needs.get-instance.outputs.instance_ip }}
-        run: |
-          echo "Waiting 30 seconds for application to fully start..."
-          sleep 30
-          
-          for i in {1..10}; do
-            HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://$INSTANCE_IP/health || echo "000")
-            
-            if [ "$HTTP_STATUS" = "200" ]; then
-              echo "✅ Application is running successfully!"
-              echo "🌍 Access your app at: http://$INSTANCE_IP"
-              exit 0
-            else
-              echo "⏳ Attempt $i/10: Health check returned $HTTP_STATUS, waiting 10 seconds..."
+              echo "Attempt $i/30: SSH not ready, waiting 10 seconds..."
               sleep 10
             fi
           done
+
+      - name: Setup Ansible
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ansible
+          ansible --version
+
+      - name: Add EC2 to known hosts
+        run: |
+          ssh-keyscan -H ${{ steps.get_ip.outputs.instance_ip }} >> ~/.ssh/known_hosts
+
+      - name: Run Ansible Playbook
+        working-directory: ./ansible
+        env:
+          EC2_IP: ${{ steps.get_ip.outputs.instance_ip }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          ANSIBLE_HOST_KEY_CHECKING: "False"
+        run: |
+          ansible-playbook deploy-playbook.yml -i inventory.yml -v
+
+      - name: Verify Deployment
+        run: |
+          echo "🔍 Verifying deployment..."
           
-          echo "⚠️ Application health check failed"
+          for i in {1..10}; do
+            HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://${{ steps.get_ip.outputs.instance_ip }}/health || echo "000")
+            
+            if [ "$HTTP_STATUS" = "200" ]; then
+              echo "✅ Application is healthy!"
+              exit 0
+            else
+              echo "⏳ Attempt $i/10: Health check returned $HTTP_STATUS"
+              sleep 5
+            fi
+          done
+          
+          echo "⚠️ Health check failed"
+          exit 1
 
       - name: Deployment Summary
         if: always()
         run: |
           echo "## 🚀 Deployment Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "✅ Application deployed successfully" >> $GITHUB_STEP_SUMMARY
+          echo "✅ Infrastructure provisioned with Terraform" >> $GITHUB_STEP_SUMMARY
+          echo "✅ Application deployed with Ansible" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### 🌐 Access Information" >> $GITHUB_STEP_SUMMARY
-          echo "- **Application URL:** http://${{ needs.get-instance.outputs.instance_ip }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Health Check:** http://${{ needs.get-instance.outputs.instance_ip }}/health" >> $GITHUB_STEP_SUMMARY
+          echo "- **Application URL:** http://${{ steps.get_ip.outputs.instance_ip }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Health Check:** http://${{ steps.get_ip.outputs.instance_ip }}/health" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🛠️ Technologies Used" >> $GITHUB_STEP_SUMMARY
+          echo "- **Terraform:** Infrastructure provisioning" >> $GITHUB_STEP_SUMMARY
+          echo "- **Ansible:** Configuration management & deployment" >> $GITHUB_STEP_SUMMARY
+          echo "- **Docker:** Application containerization" >> $GITHUB_STEP_SUMMARY
+          echo "- **Nginx:** Web server" >> $GITHUB_STEP_SUMMARY
