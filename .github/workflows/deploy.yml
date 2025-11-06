@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 env:
-  AWS_REGION: us-east-1
+  AWS_REGION: eu-north-1
 
 jobs:
   terraform:
@@ -70,15 +70,15 @@ jobs:
       - name: Setup SSH
         run: |
           mkdir -p ~/.ssh
-          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
-          chmod 600 ~/.ssh/id_rsa
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/devops-automation-key
+          chmod 600 ~/.ssh/devops-automation-key
           ssh-keyscan -H ${{ needs.terraform.outputs.instance_ip }} >> ~/.ssh/known_hosts
 
       - name: Deploy to EC2
         env:
           INSTANCE_IP: ${{ needs.terraform.outputs.instance_ip }}
         run: |
-          ssh -o StrictHostKeyChecking=no ubuntu@$INSTANCE_IP << 'EOF'
+          ssh -i ~/.ssh/devops-automation-key -o StrictHostKeyChecking=no ubuntu@$INSTANCE_IP << 'EOF'
             # Navigate to app directory
             cd /home/ubuntu/app
             
