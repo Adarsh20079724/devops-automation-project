@@ -15,12 +15,7 @@ output "instance_public_dns" {
 
 output "application_url" {
   description = "URL to access the application"
-  value       = "http://${aws_eip.app_eip.public_ip}:3000"
-}
-
-output "ssh_connection_command" {
-  description = "Command to SSH into the instance"
-  value       = "ssh -i your-key.pem ec2-user@${aws_eip.app_eip.public_ip}"
+  value       = "http://${aws_eip.app_eip.public_ip}:5000"
 }
 
 output "security_group_id" {

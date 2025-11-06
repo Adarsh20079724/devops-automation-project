@@ -1,196 +1,133 @@
-name: CI/CD Pipeline
+name: Deploy to AWS EC2
 
 on:
   push:
-    branches: [ main, develop ]
-  pull_request:
-    branches: [ main ]
+    branches:
+      - main
   workflow_dispatch:
 
 env:
   AWS_REGION: us-east-1
 
 jobs:
-  # Job 1: Build and Test
-  build-and-test:
-    name: Build and Test Application
+  terraform:
+    name: Provision Infrastructure
     runs-on: ubuntu-latest
+    outputs:
+      instance_ip: ${{ steps.terraform_output.outputs.instance_ip }}
     
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '18'
-
-      - name: Install Frontend Dependencies
-        working-directory: ./frontend
-        run: npm ci
-
-      - name: Install Backend Dependencies
-        working-directory: ./backend
-        run: npm ci
-
-      - name: Build Frontend
-        working-directory: ./frontend
-        run: npm run build
-
-      - name: Test Backend
-        working-directory: ./backend
-        run: echo "✅ Backend validation passed"
-
-  # Job 2: Deploy Infrastructure (Terraform)
-  terraform-deploy:
-    name: Deploy Infrastructure with Terraform
-    needs: build-and-test
-    runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    
-    defaults:
-      run:
-        working-directory: ./terraform
-    
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: 1.6.0
-
-      - name: Configure AWS Credentials
+      - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.6.0
+          terraform_wrapper: false
+
       - name: Terraform Init
+        working-directory: ./terraform
         run: terraform init
 
-      - name: Terraform Validate
-        run: terraform validate
-
       - name: Terraform Plan
-        run: terraform plan -out=tfplan
+        working-directory: ./terraform
+        run: terraform plan -var="public_key=${{ secrets.SSH_PUBLIC_KEY }}"
 
       - name: Terraform Apply
-        run: terraform apply -auto-approve tfplan
+        working-directory: ./terraform
+        run: terraform apply -auto-approve -var="public_key=${{ secrets.SSH_PUBLIC_KEY }}"
 
       - name: Get Terraform Outputs
-        id: terraform-outputs
+        id: terraform_output
+        working-directory: ./terraform
         run: |
-          echo "ec2_ip=$(terraform output -raw instance_public_ip)" >> $GITHUB_OUTPUT
-          echo "instance_id=$(terraform output -raw instance_id)" >> $GITHUB_OUTPUT
+          INSTANCE_IP=$(terraform output -raw instance_public_ip)
+          echo "instance_ip=$INSTANCE_IP" >> $GITHUB_OUTPUT
+          echo "Instance IP: $INSTANCE_IP"
 
-    outputs:
-      ec2_ip: ${{ steps.terraform-outputs.outputs.ec2_ip }}
-      instance_id: ${{ steps.terraform-outputs.outputs.instance_id }}
-
-  # Job 3: Application Deployment
-  app-deploy:
-    name: Deploy Application to EC2
-    needs: terraform-deploy
+  deploy:
+    name: Deploy Application
+    needs: terraform
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     
     steps:
-      - name: Configure SSH Key
-        run: |
-          echo "${{ secrets.EC2_SSH_PRIVATE_KEY }}" > ec2-key.pem
-          chmod 400 ec2-key.pem
+      - name: Checkout code
+        uses: actions/checkout@v4
 
       - name: Wait for EC2 to be ready
         run: |
-          echo "⏳ Waiting for EC2 instance to be fully ready..."
+          echo "Waiting 90 seconds for EC2 instance to initialize..."
           sleep 90
 
-      - name: Deploy Application via SSH
-        env:
-          EC2_IP: ${{ needs.terraform-deploy.outputs.ec2_ip }}
-          REPO_URL: ${{ github.server_url }}/${{ github.repository }}.git
-          BRANCH: ${{ github.ref_name }}
+      - name: Setup SSH
         run: |
-          ssh -o StrictHostKeyChecking=no -i ec2-key.pem ec2-user@${EC2_IP} << 'ENDSSH'
-            set -e
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H ${{ needs.terraform.outputs.instance_ip }} >> ~/.ssh/known_hosts
+
+      - name: Deploy to EC2
+        env:
+          INSTANCE_IP: ${{ needs.terraform.outputs.instance_ip }}
+        run: |
+          ssh -o StrictHostKeyChecking=no ubuntu@$INSTANCE_IP << 'EOF'
+            # Navigate to app directory
+            cd /home/ubuntu/app
             
-            echo "📂 Setting up application directory..."
-            cd /home/ec2-user
+            # Remove old code if exists
+            rm -rf devops-automation-project
             
-            # Clone or pull repository
-            if [ -d "app" ]; then
-              echo "🔄 Updating existing repository..."
-              cd app
-              git pull origin ${BRANCH}
-            else
-              echo "📥 Cloning repository..."
-              git clone ${REPO_URL} app
-              cd app
-              git checkout ${BRANCH}
-            fi
+            # Clone the repository
+            git clone https://github.com/${{ github.repository }}.git
+            cd devops-automation-project
             
-            echo "🔄 Stopping existing containers..."
-            docker stop devops-automation-project 2>/dev/null || true
-            docker rm devops-automation-project 2>/dev/null || true
+            # Stop and remove old containers
+            docker compose down || true
+            docker system prune -af
             
-            echo "🐳 Building Docker image..."
-            docker build -f docker/Dockerfile -t hello-world-devops:latest .
+            # Build and start new containers
+            docker compose up -d --build
             
-            echo "🚀 Starting new container..."
-            docker run -d \
-              --name devops-automation-project \
-              --restart unless-stopped \
-              -p 3000:3000 \
-              -e NODE_ENV=production \
-              hello-world-devops:latest
+            # Show running containers
+            docker ps
             
-            echo "⏳ Waiting for application to start..."
-            sleep 10
-            
-            echo "🏥 Checking application health..."
-            if curl -f http://localhost:3000/api/health; then
-              echo "✅ Application deployed successfully!"
-            else
-              echo "❌ Health check failed!"
-              docker logs devops-automation-project
-              exit 1
-            fi
-            
-            echo "🧹 Cleaning up old Docker images..."
-            docker image prune -f
-          ENDSSH
+            echo "✅ Deployment completed successfully!"
+          EOF
 
       - name: Verify Deployment
-        env:
-          EC2_IP: ${{ needs.terraform-deploy.outputs.ec2_ip }}
         run: |
-          echo "🎉 Deployment completed successfully!"
-          echo "🌐 Application URL: http://${EC2_IP}:3000"
-          echo "🏥 Health check: http://${EC2_IP}:3000/api/health"
+          echo "Waiting for application to start..."
+          sleep 30
+          
+          INSTANCE_IP=${{ needs.terraform.outputs.instance_ip }}
+          
+          # Check if app is responding
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://$INSTANCE_IP:5000/api/health || echo "000")
+          
+          if [ "$HTTP_STATUS" = "200" ]; then
+            echo "✅ Application is running successfully!"
+            echo "🌍 Access your app at: http://$INSTANCE_IP:5000"
+          else
+            echo "⚠️ Application health check returned status: $HTTP_STATUS"
+            echo "The application may still be starting up. Check manually at: http://$INSTANCE_IP:5000"
+          fi
 
-      - name: Cleanup
-        if: always()
-        run: rm -f ec2-key.pem
-
-  # Job 4: Notification
-  notify:
-    name: Send Deployment Notification
-    needs: [terraform-deploy, app-deploy]
-    runs-on: ubuntu-latest
-    if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
-    
-    steps:
-      - name: Deployment Success
-        if: needs.app-deploy.result == 'success'
+      - name: Deployment Summary
         run: |
-          echo "🎉 Deployment successful!"
-          echo "🌐 Application URL: http://${{ needs.terraform-deploy.outputs.ec2_ip }}:3000"
-
-      - name: Deployment Failed
-        if: needs.app-deploy.result == 'failure'
-        run: |
-          echo "❌ Deployment failed!"
-          exit 1
+          echo "## 🚀 Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "✅ Infrastructure provisioned successfully" >> $GITHUB_STEP_SUMMARY
+          echo "✅ Application deployed to EC2" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🌐 Access Information" >> $GITHUB_STEP_SUMMARY
+          echo "- **Application URL:** http://${{ needs.terraform.outputs.instance_ip }}:5000" >> $GITHUB_STEP_SUMMARY
+          echo "- **Health Check:** http://${{ needs.terraform.outputs.instance_ip }}:5000/api/health" >> $GITHUB_STEP_SUMMARY
+          echo "- **Instance IP:** ${{ needs.terraform.outputs.instance_ip }}" >> $GITHUB_STEP_SUMMARY
