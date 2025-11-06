@@ -54,7 +54,13 @@ resource "aws_security_group" "app_sg" {
     Name    = "devops-automation-sg"
     Project = "DevOps-Automation"
   }
+
+  lifecycle {
+    ignore_changes = [name, description]
+  }
 }
+
+
 
 # Key Pair
 resource "aws_key_pair" "app_key" {
@@ -64,6 +70,10 @@ resource "aws_key_pair" "app_key" {
   tags = {
     Name    = "devops-automation-key"
     Project = "DevOps-Automation"
+  }
+
+  lifecycle {
+    ignore_changes = [key_name, public_key]
   }
 }
 
