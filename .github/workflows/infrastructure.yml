@@ -1,0 +1,88 @@
+name: Provision Infrastructure
+
+on:
+  workflow_dispatch: # Manual trigger only
+    inputs:
+      action:
+        description: "Terraform action to perform"
+        required: true
+        default: "apply"
+        type: choice
+        options:
+          - apply
+          - destroy
+
+jobs:
+  terraform:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION || 'eu-north-1' }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: 1.6.0
+          terraform_wrapper: false
+
+      - name: Terraform Init
+        working-directory: ./terraform
+        run: terraform init
+
+      - name: Terraform Plan
+        working-directory: ./terraform
+        run: terraform plan
+        env:
+          TF_VAR_key_name: ${{ secrets.AWS_KEY_NAME }}
+          TF_VAR_aws_region: ${{ secrets.AWS_REGION || 'eu-north-1' }}
+
+      - name: Terraform Apply
+        if: github.event.inputs.action == 'apply'
+        working-directory: ./terraform
+        run: terraform apply -auto-approve
+        env:
+          TF_VAR_key_name: ${{ secrets.AWS_KEY_NAME }}
+          TF_VAR_aws_region: ${{ secrets.AWS_REGION || 'eu-north-1' }}
+
+      - name: Terraform Destroy
+        if: github.event.inputs.action == 'destroy'
+        working-directory: ./terraform
+        run: terraform destroy -auto-approve
+        env:
+          TF_VAR_key_name: ${{ secrets.AWS_KEY_NAME }}
+          TF_VAR_aws_region: ${{ secrets.AWS_REGION || 'eu-north-1' }}
+
+      - name: Get EC2 IP
+        if: github.event.inputs.action == 'apply'
+        id: ec2_ip
+        working-directory: ./terraform
+        run: |
+          EC2_IP=$(terraform output -raw instance_public_ip)
+          echo "ip=$EC2_IP" >> $GITHUB_OUTPUT
+          echo "EC2 IP: $EC2_IP"
+
+      - name: Display Infrastructure Info
+        if: github.event.inputs.action == 'apply'
+        run: |
+          echo "✅ Infrastructure provisioned successfully!"
+          echo "EC2 Instance IP: ${{ steps.ec2_ip.outputs.ip }}"
+          echo ""
+          echo "Next steps:"
+          echo "1. Wait 2-3 minutes for EC2 to fully boot"
+          echo "2. Go to Actions tab"
+          echo "3. Run 'Deploy Application' workflow"
+          echo "4. Your app will be deployed to: http://${{ steps.ec2_ip.outputs.ip }}"
+
+      - name: Display Destroy Info
+        if: github.event.inputs.action == 'destroy'
+        run: |
+          echo "✅ Infrastructure destroyed successfully!"
+          echo "All AWS resources have been removed."
