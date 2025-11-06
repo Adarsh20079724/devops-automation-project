@@ -1,35 +1,30 @@
-# Multi-stage build for optimization
-
 # Stage 1: Build React frontend
-FROM node:18-alpine AS frontend-build
+FROM node:18-alpine AS build
 
-WORKDIR /app/frontend
+WORKDIR /app
 
+# Copy frontend files
 COPY frontend/package*.json ./
 RUN npm install
 
 COPY frontend/ ./
 RUN npm run build
 
-# Stage 2: Setup backend and copy frontend build
-FROM node:18-alpine
+# Stage 2: Serve with Nginx
+FROM nginx:alpine
 
-WORKDIR /app
+# Copy custom nginx config
+COPY nginx/nginx.conf /etc/nginx/nginx.conf
 
-# Copy backend files
-COPY backend/package*.json ./
-RUN npm install --production
+# Copy built frontend from build stage
+COPY --from=build /app/dist /usr/share/nginx/html
 
-COPY backend/ ./
+# Expose port 80
+EXPOSE 80
 
-# Copy built frontend from previous stage
-COPY --from=frontend-build /app/frontend/dist ./frontend/dist
+# Health check
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+  CMD wget --no-verbose --tries=1 --spider http://localhost/health || exit 1
 
-# Expose port
-EXPOSE 5000
-
-# Set environment variable
-ENV NODE_ENV=production
-
-# Start the server
-CMD ["node", "server.js"]
+# Start Nginx
+CMD ["nginx", "-g", "daemon off;"]

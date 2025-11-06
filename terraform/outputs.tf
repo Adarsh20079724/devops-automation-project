@@ -15,7 +15,7 @@ output "instance_public_dns" {
 
 output "application_url" {
   description = "URL to access the application"
-  value       = "http://${aws_eip.app_eip.public_ip}:5000"
+  value       = "http://${aws_eip.app_eip.public_ip}"
 }
 
 output "security_group_id" {
