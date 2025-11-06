@@ -5,23 +5,32 @@ terraform {
       version = "~> 5.0"
     }
   }
-  required_version = ">= 1.0"
 }
 
 provider "aws" {
   region = var.aws_region
 }
 
-# VPC - Using default VPC for simplicity
-data "aws_vpc" "default" {
-  default = true
+# Get the latest Ubuntu AMI
+data "aws_ami" "ubuntu" {
+  most_recent = true
+  owners      = ["099720109477"] # Canonical
+
+  filter {
+    name   = "name"
+    values = ["ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server-*"]
+  }
+
+  filter {
+    name   = "virtualization-type"
+    values = ["hvm"]
+  }
 }
 
-# Security Group
+# Create Security Group
 resource "aws_security_group" "app_sg" {
-  name        = "devops-automation-sg"
+  name        = "devops-app-sg"
   description = "Security group for DevOps automation project"
-  vpc_id      = data.aws_vpc.default.id
 
   # SSH access
   ingress {
@@ -32,16 +41,25 @@ resource "aws_security_group" "app_sg" {
     description = "SSH access"
   }
 
-  # HTTP access for the app
+  # HTTP access
   ingress {
     from_port   = 80
     to_port     = 80
     protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
-    description = "Application access"
+    description = "HTTP access"
   }
 
-  # Outbound internet access
+  # HTTPS access
+  ingress {
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+    description = "HTTPS access"
+  }
+
+  # Outbound traffic
   egress {
     from_port   = 0
     to_port     = 0
@@ -51,33 +69,17 @@ resource "aws_security_group" "app_sg" {
   }
 
   tags = {
-    Name    = "devops-automation-sg"
-    Project = "DevOps-Automation"
+    Name = "devops-app-sg"
   }
 }
 
-
-
-# Key Pair
-resource "aws_key_pair" "app_key" {
-  key_name   = var.key_name
-  public_key = var.public_key
-
-  tags = {
-    Name    = "devops-automation-key"
-    Project = "DevOps-Automation"
-  }
-}
-
-# EC2 Instance
+# Create EC2 Instance
 resource "aws_instance" "app_server" {
-  ami           = var.ami_id
+  ami           = data.aws_ami.ubuntu.id
   instance_type = var.instance_type
-  key_name      = aws_key_pair.app_key.key_name
+  key_name      = var.key_name
 
   vpc_security_group_ids = [aws_security_group.app_sg.id]
-
-  user_data = file("${path.module}/scripts/setup.sh")
 
   root_block_device {
     volume_size = 20
@@ -85,8 +87,19 @@ resource "aws_instance" "app_server" {
   }
 
   tags = {
-    Name    = "devops-automation-server"
-    Project = "DevOps-Automation"
+    Name = "devops-automation-server"
+  }
+
+  # Wait for instance to be ready
+  provisioner "local-exec" {
+    command = "sleep 30"
   }
 }
 
+# Create Ansible inventory file
+resource "local_file" "ansible_inventory" {
+  content = templatefile("${path.module}/inventory.tpl", {
+    public_ip = aws_instance.app_server.public_ip
+  })
+  filename = "${path.module}/../ansible/inventory.ini"
+}

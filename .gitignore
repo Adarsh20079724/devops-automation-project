@@ -1,20 +1,21 @@
 # Dependencies
 node_modules/
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
+package-lock.json
 
-# Build outputs
+# Build output
 dist/
 build/
-*.local
 
 # Terraform
-.terraform/
 *.tfstate
 *.tfstate.*
-*.tfvars
+.terraform/
 .terraform.lock.hcl
+
+# SSH keys
+*.pem
+*.key
+private_key.pem
 
 # Environment variables
 .env
@@ -26,16 +27,12 @@ build/
 .idea/
 *.swp
 *.swo
-*~
 
 # OS
 .DS_Store
 Thumbs.db
 
-# SSH keys
-*.pem
-*.key
-id_rsa*
-
-# Docker
+# Logs
 *.log
+npm-debug.log*
+yarn-debug.log*

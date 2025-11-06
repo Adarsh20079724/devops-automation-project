@@ -9,16 +9,11 @@ output "instance_public_ip" {
 }
 
 output "instance_public_dns" {
-  description = "Public DNS name of the EC2 instance"
+  description = "Public DNS of the EC2 instance"
   value       = aws_instance.app_server.public_dns
 }
 
 output "application_url" {
   description = "URL to access the application"
   value       = "http://${aws_instance.app_server.public_ip}"
-}
-
-output "security_group_id" {
-  description = "ID of the security group"
-  value       = aws_security_group.app_sg.id
 }

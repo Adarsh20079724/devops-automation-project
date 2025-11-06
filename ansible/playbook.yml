@@ -1,26 +1,109 @@
 ---
-- name: DevOps Automation - Infrastructure and Deployment
-  hosts: localhost
-  connection: local
-  gather_facts: no
-  
-  tasks:
-    - name: Provision Infrastructure
-      include_role:
-        name: infrastructure
-
-    - name: Add EC2 instance to inventory
-      add_host:
-        name: "{{ instance_ip }}"
-        groups: devops_servers
-        ansible_host: "{{ instance_ip }}"
-        ansible_user: ubuntu
-        ansible_ssh_private_key_file: ~/.ssh/devops-automation-key
-
-- name: Deploy Application
-  hosts: devops_servers
-  gather_facts: yes
+- name: Deploy DevOps Automation Project
+  hosts: webservers
   become: yes
-  
-  roles:
-    - deploy
+  vars:
+    app_dir: /home/ubuntu/app
+    repo_url: https://github.com/Adarsh20079724/devops-automation-project.git
+    
+  tasks:
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+    - name: Install required packages
+      apt:
+        name:
+          - apt-transport-https
+          - ca-certificates
+          - curl
+          - software-properties-common
+          - git
+        state: present
+
+    - name: Add Docker GPG key
+      apt_key:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        state: present
+
+    - name: Add Docker repository
+      apt_repository:
+        repo: deb [arch=amd64] https://download.docker.com/linux/ubuntu jammy stable
+        state: present
+
+    - name: Install Docker
+      apt:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+        state: present
+        update_cache: yes
+
+    - name: Start and enable Docker
+      systemd:
+        name: docker
+        state: started
+        enabled: yes
+
+    - name: Add ubuntu user to docker group
+      user:
+        name: ubuntu
+        groups: docker
+        append: yes
+
+    - name: Remove old app directory if exists
+      file:
+        path: "{{ app_dir }}"
+        state: absent
+
+    - name: Clone repository
+      git:
+        repo: "{{ repo_url }}"
+        dest: "{{ app_dir }}"
+        version: main
+        force: yes
+      become_user: ubuntu
+
+    - name: Stop and remove old container
+      docker_container:
+        name: devops-app
+        state: absent
+      ignore_errors: yes
+
+    - name: Remove old Docker image
+      docker_image:
+        name: devops-app
+        state: absent
+        force_absent: yes
+      ignore_errors: yes
+
+    - name: Build Docker image
+      docker_image:
+        name: devops-app
+        build:
+          path: "{{ app_dir }}"
+          dockerfile: docker/Dockerfile
+        source: build
+        state: present
+        force_source: yes
+
+    - name: Run Docker container
+      docker_container:
+        name: devops-app
+        image: devops-app
+        state: started
+        restart_policy: always
+        ports:
+          - "80:80"
+
+    - name: Wait for application to be ready
+      wait_for:
+        port: 80
+        delay: 5
+        timeout: 60
+
+    - name: Display success message
+      debug:
+        msg: "Application deployed successfully! Access it at http://{{ ansible_host }}"
