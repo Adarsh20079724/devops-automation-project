@@ -9,7 +9,7 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
@@ -54,17 +54,35 @@ jobs:
           echo "EC2 IP: $EC2_IP"
 
       - name: Wait for EC2 to be ready
-        run: sleep 60
+        run: |
+          echo "Waiting for EC2 instance to be fully ready..."
+          sleep 90
 
       - name: Setup SSH key
         run: |
-          echo "${{ secrets.SSH_PRIVATE_KEY }}" > private_key.pem
-          chmod 600 private_key.pem
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key.pem
+          chmod 600 ~/.ssh/deploy_key.pem
+          echo "SSH key created successfully"
+
+      - name: Test SSH Connection
+        run: |
+          echo "Testing SSH connection to ${{ steps.ec2_ip.outputs.ip }}"
+          for i in {1..5}; do
+            if ssh -i ~/.ssh/deploy_key.pem -o StrictHostKeyChecking=no -o ConnectTimeout=10 ubuntu@${{ steps.ec2_ip.outputs.ip }} "echo 'SSH connection successful'"; then
+              echo "✅ SSH connection established"
+              exit 0
+            fi
+            echo "Attempt $i failed, waiting 10 seconds..."
+            sleep 10
+          done
+          echo "❌ Failed to establish SSH connection after 5 attempts"
+          exit 1
 
       - name: Setup Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.10'
+          python-version: "3.10"
 
       - name: Install Ansible
         run: |
