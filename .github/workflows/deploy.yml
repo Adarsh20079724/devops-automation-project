@@ -131,3 +131,4 @@ jobs:
           echo "- **Application URL:** http://${{ needs.terraform.outputs.instance_ip }}:5000" >> $GITHUB_STEP_SUMMARY
           echo "- **Health Check:** http://${{ needs.terraform.outputs.instance_ip }}:5000/api/health" >> $GITHUB_STEP_SUMMARY
           echo "- **Instance IP:** ${{ needs.terraform.outputs.instance_ip }}" >> $GITHUB_STEP_SUMMARY
+          
