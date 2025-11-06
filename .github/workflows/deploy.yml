@@ -38,7 +38,7 @@ jobs:
         run: terraform init
 
       - name: Import Existing Resources
-        working-directory: ./terraform/scripts
+        working-directory: ./terraform
         continue-on-error: true
         run: |
           # Try to import existing security group
