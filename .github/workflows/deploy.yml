@@ -19,12 +19,13 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: eu-north-1
+          aws-region: ${{ secrets.AWS_REGION || 'us-east-1' }}
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v2
         with:
           terraform_version: 1.6.0
+          terraform_wrapper: false
 
       - name: Terraform Init
         working-directory: ./terraform
@@ -35,21 +36,25 @@ jobs:
         run: terraform plan
         env:
           TF_VAR_key_name: ${{ secrets.AWS_KEY_NAME }}
+          TF_VAR_aws_region: ${{ secrets.AWS_REGION || 'us-east-1' }}
 
       - name: Terraform Apply
         working-directory: ./terraform
         run: terraform apply -auto-approve
         env:
           TF_VAR_key_name: ${{ secrets.AWS_KEY_NAME }}
+          TF_VAR_aws_region: ${{ secrets.AWS_REGION || 'us-east-1' }}
 
       - name: Get EC2 IP
         id: ec2_ip
         working-directory: ./terraform
         run: |
-          echo "ip=$(terraform output -raw instance_public_ip)" >> $GITHUB_OUTPUT
+          EC2_IP=$(terraform output -raw instance_public_ip)
+          echo "ip=$EC2_IP" >> $GITHUB_OUTPUT
+          echo "EC2 IP: $EC2_IP"
 
       - name: Wait for EC2 to be ready
-        run: sleep 150
+        run: sleep 60
 
       - name: Setup SSH key
         run: |
