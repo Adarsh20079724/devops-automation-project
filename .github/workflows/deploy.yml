@@ -5,18 +5,18 @@ on:
     branches:
       - main
     paths:
-      - "src/**"
-      - "docker/**"
-      - "ansible/**"
-      - "package.json"
-      - "index.html"
-      - "vite.config.js"
+      - 'src/**'
+      - 'docker/**'
+      - 'ansible/**'
+      - 'package.json'
+      - 'index.html'
+      - 'vite.config.js'
   workflow_dispatch:
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
-
+    
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
@@ -42,7 +42,7 @@ jobs:
         working-directory: ./terraform
         run: |
           echo "Checking if infrastructure is provisioned..."
-
+          
           # Check if state file exists and has resources
           if ! terraform state list 2>/dev/null | grep -q "aws_instance"; then
             echo ""
@@ -65,7 +65,7 @@ jobs:
             echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
             exit 1
           fi
-
+          
           echo "✅ Infrastructure found in Terraform state"
 
       - name: Get EC2 IP from Terraform State
@@ -74,7 +74,7 @@ jobs:
         run: |
           # Try to get EC2 IP from Terraform state
           EC2_IP=$(terraform output -raw instance_public_ip 2>&1)
-
+          
           # Check if output contains error/warning messages
           if echo "$EC2_IP" | grep -q "Warning\|Error\|No outputs"; then
             echo "❌ Error: No EC2 instance found in Terraform state!"
@@ -91,14 +91,14 @@ jobs:
             echo "7. Then run this deployment workflow again"
             exit 1
           fi
-
+          
           # Validate IP format
           if [[ ! "$EC2_IP" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "❌ Error: Invalid EC2 IP address: $EC2_IP"
             echo "Please provision infrastructure first."
             exit 1
           fi
-
+          
           echo "ip=$EC2_IP" >> $GITHUB_OUTPUT
           echo "✅ Found EC2 IP: $EC2_IP"
 
@@ -133,7 +133,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v4
         with:
-          python-version: "3.10"
+          python-version: '3.10'
 
       - name: Install Ansible
         run: |
