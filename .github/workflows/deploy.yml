@@ -4,13 +4,13 @@ on:
   push:
     branches:
       - main
-      
+
   workflow_dispatch:
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
@@ -20,20 +20,20 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ secrets.AWS_REGION || 'us-east-1' }}
+          aws-region: ${{ secrets.AWS_REGION || 'eu-north-1' }}
 
       - name: Check if EC2 Instance Exists
         id: check_ec2
         run: |
           echo "Checking for EC2 instance in AWS..."
-          
+
           # Query AWS for running EC2 instances with our tag
           INSTANCE_ID=$(aws ec2 describe-instances \
             --filters "Name=tag:Name,Values=devops-automation-server" \
                       "Name=instance-state-name,Values=running,pending" \
             --query "Reservations[0].Instances[0].InstanceId" \
             --output text 2>/dev/null)
-          
+
           if [ "$INSTANCE_ID" == "None" ] || [ -z "$INSTANCE_ID" ]; then
             echo ""
             echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -55,7 +55,7 @@ jobs:
             echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
             exit 1
           fi
-          
+
           echo "✅ Found EC2 instance: $INSTANCE_ID"
           echo "instance_id=$INSTANCE_ID" >> $GITHUB_OUTPUT
 
@@ -63,20 +63,20 @@ jobs:
         id: ec2_ip
         run: |
           echo "Getting EC2 public IP address..."
-          
+
           # Get public IP from AWS
           EC2_IP=$(aws ec2 describe-instances \
             --instance-ids ${{ steps.check_ec2.outputs.instance_id }} \
             --query "Reservations[0].Instances[0].PublicIpAddress" \
             --output text)
-          
+
           # Validate IP format
           if [[ ! "$EC2_IP" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "❌ Error: Invalid or missing EC2 IP address: $EC2_IP"
             echo "The instance might still be starting. Wait a moment and try again."
             exit 1
           fi
-          
+
           echo "ip=$EC2_IP" >> $GITHUB_OUTPUT
           echo "✅ EC2 Public IP: $EC2_IP"
 
@@ -111,7 +111,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.10'
+          python-version: "3.10"
 
       - name: Install Ansible
         run: |
