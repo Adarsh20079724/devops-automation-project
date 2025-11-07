@@ -4,7 +4,13 @@ on:
   push:
     branches:
       - main
-      
+    paths:
+      - 'src/**'
+      - 'docker/**'
+      - 'ansible/**'
+      - 'package.json'
+      - 'index.html'
+      - 'vite.config.js'
   workflow_dispatch:
 
 jobs:
@@ -20,30 +26,65 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ secrets.AWS_REGION || 'eu-north-1' }}
+          aws-region: ${{ secrets.AWS_REGION || 'us-east-1' }}
 
-      - name: Setup Terraform (to get EC2 IP)
-        uses: hashicorp/setup-terraform@v2
-        with:
-          terraform_version: 1.6.0
-          terraform_wrapper: false
+      - name: Check if EC2 Instance Exists
+        id: check_ec2
+        run: |
+          echo "Checking for EC2 instance in AWS..."
+          
+          # Query AWS for running EC2 instances with our tag
+          INSTANCE_ID=$(aws ec2 describe-instances \
+            --filters "Name=tag:Name,Values=devops-automation-server" \
+                      "Name=instance-state-name,Values=running,pending" \
+            --query "Reservations[0].Instances[0].InstanceId" \
+            --output text 2>/dev/null)
+          
+          if [ "$INSTANCE_ID" == "None" ] || [ -z "$INSTANCE_ID" ]; then
+            echo ""
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "❌ ERROR: No EC2 instance found!"
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo ""
+            echo "No running EC2 instance with name 'devops-automation-server' found in AWS."
+            echo ""
+            echo "📋 Required Steps:"
+            echo "  1. Go to the 'Actions' tab in your repository"
+            echo "  2. Click on 'Provision Infrastructure' workflow"
+            echo "  3. Click 'Run workflow' button (top right)"
+            echo "  4. Select 'apply' from the dropdown"
+            echo "  5. Click 'Run workflow' to start"
+            echo "  6. Wait for completion (~3 minutes)"
+            echo "  7. Wait additional 2-3 minutes for EC2 to boot"
+            echo "  8. Then run this deployment workflow again"
+            echo ""
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            exit 1
+          fi
+          
+          echo "✅ Found EC2 instance: $INSTANCE_ID"
+          echo "instance_id=$INSTANCE_ID" >> $GITHUB_OUTPUT
 
-      - name: Terraform Init
-        working-directory: ./terraform
-        run: terraform init
-
-      - name: Get EC2 IP
+      - name: Get EC2 Public IP
         id: ec2_ip
-        working-directory: ./terraform
         run: |
-          EC2_IP=$(terraform output -raw instance_public_ip)
+          echo "Getting EC2 public IP address..."
+          
+          # Get public IP from AWS
+          EC2_IP=$(aws ec2 describe-instances \
+            --instance-ids ${{ steps.check_ec2.outputs.instance_id }} \
+            --query "Reservations[0].Instances[0].PublicIpAddress" \
+            --output text)
+          
+          # Validate IP format
+          if [[ ! "$EC2_IP" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "❌ Error: Invalid or missing EC2 IP address: $EC2_IP"
+            echo "The instance might still be starting. Wait a moment and try again."
+            exit 1
+          fi
+          
           echo "ip=$EC2_IP" >> $GITHUB_OUTPUT
-          echo "EC2 IP: $EC2_IP"
-
-      - name: Wait for EC2 to be ready
-        run: |
-          echo "Waiting for EC2 instance to be fully ready..."
-          sleep 60  
+          echo "✅ EC2 Public IP: $EC2_IP"
 
       - name: Setup SSH key
         run: |
@@ -51,7 +92,7 @@ jobs:
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key.pem
           chmod 600 ~/.ssh/deploy_key.pem
           echo "SSH key created successfully"
-  
+
       - name: Test SSH Connection
         run: |
           echo "Testing SSH connection to ${{ steps.ec2_ip.outputs.ip }}"
@@ -63,14 +104,15 @@ jobs:
             echo "Attempt $i failed, waiting 10 seconds..."
             sleep 10
           done
-          echo "Failed to establish SSH connection after 5 attempts"
+          echo "❌ Failed to establish SSH connection after 5 attempts"
+          echo "Make sure the EC2 instance is running and security group allows SSH"
           exit 1
 
-      # - name: Update Ansible Inventory
-      #   run: |
-      #     echo "[webservers]" > ansible/inventory.ini
-      #     echo "${{ steps.ec2_ip.outputs.ip }} ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/deploy_key.pem ansible_ssh_common_args='-o StrictHostKeyChecking=no'" >> ansible/inventory.ini
-      #     cat ansible/inventory.ini
+      - name: Update Ansible Inventory
+        run: |
+          echo "[webservers]" > ansible/inventory.ini
+          echo "${{ steps.ec2_ip.outputs.ip }} ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/deploy_key.pem ansible_ssh_common_args='-o StrictHostKeyChecking=no'" >> ansible/inventory.ini
+          cat ansible/inventory.ini
 
       - name: Setup Python
         uses: actions/setup-python@v4
