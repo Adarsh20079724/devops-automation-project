@@ -17,7 +17,7 @@ const App = () => {
         <li>✅ Ansible</li>
         <li>✅ GitHub Actions</li>
         <li>✅ AWS EC2</li>
-        <li>This is a test change</li>
+        <li>This is a test change 2</li>
         <button onClick={() => setCount(count + 1)}>{`Count ${count}`}</button>
       </ul>
       <p className="success">🎉 Deployment Successful!</p>
