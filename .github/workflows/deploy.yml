@@ -1,15 +1,22 @@
-name: Deploy to AWS
+name: Deploy Application
 
 on:
   push:
     branches:
       - main
+    paths:
+      - "src/**"
+      - "docker/**"
+      - "ansible/**"
+      - "package.json"
+      - "index.html"
+      - "vite.config.js"
   workflow_dispatch:
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
@@ -21,7 +28,7 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ secrets.AWS_REGION || 'eu-north-1' }}
 
-      - name: Setup Terraform
+      - name: Setup Terraform (to get EC2 IP)
         uses: hashicorp/setup-terraform@v2
         with:
           terraform_version: 1.6.0
@@ -31,40 +38,18 @@ jobs:
         working-directory: ./terraform
         run: terraform init
 
-      - name: Terraform Plan
-        working-directory: ./terraform
-        run: terraform plan
-        env:
-          TF_VAR_key_name: ${{ secrets.AWS_KEY_NAME }}
-          TF_VAR_aws_region: ${{ secrets.AWS_REGION || 'eu-north-1' }}
-
-      - name: Terraform Destroy (Clean Previous Deployment)
-        working-directory: ./terraform
-        run: terraform destroy -auto-approve
-        continue-on-error: true
-        env:
-          TF_VAR_key_name: ${{ secrets.AWS_KEY_NAME }}
-          TF_VAR_aws_region: ${{ secrets.AWS_REGION || 'eu-north-1' }}
-
-      - name: Terraform Apply (Fresh Deployment)
-        working-directory: ./terraform
-        run: terraform apply -auto-approve
-        env:
-          TF_VAR_key_name: ${{ secrets.AWS_KEY_NAME }}
-          TF_VAR_aws_region: ${{ secrets.AWS_REGION || 'eu-north-1' }}
-
-      - name: Get EC2 IP
+      - name: Get EC2 IP from Terraform State
         id: ec2_ip
         working-directory: ./terraform
         run: |
-          EC2_IP=$(terraform output -raw instance_public_ip)
+          EC2_IP=$(terraform output -raw instance_public_ip 2>/dev/null || echo "")
+          if [ -z "$EC2_IP" ]; then
+            echo "❌ Error: No EC2 instance found in Terraform state!"
+            echo "Please run 'Provision Infrastructure' workflow first."
+            exit 1
+          fi
           echo "ip=$EC2_IP" >> $GITHUB_OUTPUT
-          echo "EC2 IP: $EC2_IP"
-
-      - name: Wait for EC2 to be ready
-        run: |
-          echo "Waiting for EC2 instance to be fully ready..."
-          sleep 90
+          echo "Found EC2 IP: $EC2_IP"
 
       - name: Setup SSH key
         run: |
@@ -85,7 +70,14 @@ jobs:
             sleep 10
           done
           echo "❌ Failed to establish SSH connection after 5 attempts"
+          echo "Make sure the EC2 instance is running and security group allows SSH"
           exit 1
+
+      - name: Update Ansible Inventory
+        run: |
+          echo "[webservers]" > ansible/inventory.ini
+          echo "${{ steps.ec2_ip.outputs.ip }} ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/deploy_key.pem ansible_ssh_common_args='-o StrictHostKeyChecking=no'" >> ansible/inventory.ini
+          cat ansible/inventory.ini
 
       - name: Setup Python
         uses: actions/setup-python@v4
@@ -99,7 +91,7 @@ jobs:
       - name: Run Ansible Playbook
         working-directory: ./ansible
         run: |
-          ansible-playbook -i inventory.ini playbook.yml
+          ansible-playbook -i inventory.ini playbook.yml -v
         env:
           ANSIBLE_HOST_KEY_CHECKING: False
 
@@ -107,4 +99,8 @@ jobs:
         run: |
           echo "🚀 Application deployed successfully!"
           echo "Access your app at: http://${{ steps.ec2_ip.outputs.ip }}"
-          
+          echo ""
+          echo "Deployment Details:"
+          echo "- Deployment Time: $(date)"
+          echo "- Triggered by: ${{ github.actor }}"
+          echo "- Commit: ${{ github.sha }}"
