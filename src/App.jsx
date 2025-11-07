@@ -12,6 +12,7 @@ const App = () => {
         <li>✅ Ansible</li>
         <li>✅ GitHub Actions</li>
         <li>✅ AWS EC2</li>
+        <li>Installed Everything</li>
       </ul>
       <p className="success">🎉 Deployment Successful!</p>
     </div>
