@@ -1,6 +1,11 @@
+import { useState } from 'react'
 import './App.css'
 
 const App = () => {
+
+  const [count, setCount] = useState(0)
+
+
   return (
     <div className="container">
       <h1>🚀 Hello World from DevOps!</h1>
@@ -12,7 +17,8 @@ const App = () => {
         <li>✅ Ansible</li>
         <li>✅ GitHub Actions</li>
         <li>✅ AWS EC2</li>
-        <li>Installed Everything</li>
+        <li>This is a test change</li>
+        <button onClick={() => setCount(count + 1)}>{`Count ${count}`}</button>
       </ul>
       <p className="success">🎉 Deployment Successful!</p>
     </div>
