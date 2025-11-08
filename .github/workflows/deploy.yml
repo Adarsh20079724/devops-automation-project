@@ -36,27 +36,25 @@ jobs:
 
           if [ "$INSTANCE_ID" == "None" ] || [ -z "$INSTANCE_ID" ]; then
             echo ""
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            echo "❌ ERROR: No EC2 instance found!"
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            echo ""
-            echo "No running EC2 instance with name 'devops-automation-server' found in AWS."
-            echo ""
-            echo "📋 Required Steps:"
+            echo "========================================="
+            echo "ERROR: EC2 instance not found!"
+            echo "========================================="
+            echo ""        
+            echo "Please follow the next steps:"
             echo "  1. Go to the 'Actions' tab in your repository"
             echo "  2. Click on 'Provision Infrastructure' workflow"
-            echo "  3. Click 'Run workflow' button (top right)"
+            echo "  3. Click 'Run workflow' button"
             echo "  4. Select 'apply' from the dropdown"
             echo "  5. Click 'Run workflow' to start"
-            echo "  6. Wait for completion (~3 minutes)"
+            echo "  6. Wait for completion"
             echo "  7. Wait additional 2-3 minutes for EC2 to boot"
-            echo "  8. Then run this deployment workflow again"
+            echo "  8. Make a push to origin to automatically trigger deployment or run this flow again manually"
             echo ""
             echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
             exit 1
           fi
 
-          echo "✅ Found EC2 instance: $INSTANCE_ID"
+          echo "EC2 instance Found: $INSTANCE_ID"
           echo "instance_id=$INSTANCE_ID" >> $GITHUB_OUTPUT
 
       - name: Get EC2 Public IP
@@ -72,13 +70,13 @@ jobs:
 
           # Validate IP format
           if [[ ! "$EC2_IP" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "❌ Error: Invalid or missing EC2 IP address: $EC2_IP"
+            echo "Error: Invalid or missing EC2 IP address: $EC2_IP"
             echo "The instance might still be starting. Wait a moment and try again."
             exit 1
           fi
 
           echo "ip=$EC2_IP" >> $GITHUB_OUTPUT
-          echo "✅ EC2 Public IP: $EC2_IP"
+          echo "EC2 Public IP: $EC2_IP"
 
       - name: Setup SSH key
         run: |
@@ -92,13 +90,13 @@ jobs:
           echo "Testing SSH connection to ${{ steps.ec2_ip.outputs.ip }}"
           for i in {1..5}; do
             if ssh -i ~/.ssh/deploy_key.pem -o StrictHostKeyChecking=no -o ConnectTimeout=10 ubuntu@${{ steps.ec2_ip.outputs.ip }} "echo 'SSH connection successful'"; then
-              echo "✅ SSH connection established"
+              echo "SSH connection established"
               exit 0
             fi
             echo "Attempt $i failed, waiting 10 seconds..."
             sleep 10
           done
-          echo "❌ Failed to establish SSH connection after 5 attempts"
+          echo "Failed to establish SSH connection after 5 attempts"
           echo "Make sure the EC2 instance is running and security group allows SSH"
           exit 1
 
@@ -126,10 +124,10 @@ jobs:
 
       - name: Display Application URL
         run: |
-          echo "🚀 Application deployed successfully!"
+          echo "Your Application has been Deployed Succcessfully."
           echo "Access your app at: http://${{ steps.ec2_ip.outputs.ip }}"
           echo ""
-          echo "Deployment Details:"
+          echo "=====Deployment Details====="
           echo "- Deployment Time: $(date)"
           echo "- Triggered by: ${{ github.actor }}"
           echo "- Commit: ${{ github.sha }}"
