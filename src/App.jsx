@@ -20,7 +20,7 @@ const App = () => {
   
         <button onClick={() => setCount(count + 1)}>{`Count ${count}`}</button>
       </ul>
-      <p className="success">This is a test. Deployment worked again!</p>
+      <p className="success">Deployment worked. Thank you for watching.</p>
     </div>
   )
 }
