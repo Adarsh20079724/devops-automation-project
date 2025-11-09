@@ -16,10 +16,11 @@ const App = () => {
         <li>Ansible</li>
         <li>GitHub Actions</li>
         <li>AWS EC2</li>
+
   
         <button onClick={() => setCount(count + 1)}>{`Count ${count}`}</button>
       </ul>
-      <p className="success">Deployment Successfull!</p>
+      <p className="success">This is a test. Deployment worked again!</p>
     </div>
   )
 }
