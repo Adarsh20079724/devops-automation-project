@@ -72,10 +72,10 @@ jobs:
       - name: Display Infrastructure Info
         if: github.event.inputs.action == 'apply'
         run: |
-          echo "✅ Infrastructure provisioned successfully!"
+          echo "Infrastructure provisioned successfully!"
           echo "EC2 Instance IP: ${{ steps.ec2_ip.outputs.ip }}"
           echo ""
-          echo "Next steps:"
+          echo "Follow the next step for automatic deployment:"
           echo "1. Wait 2-3 minutes for EC2 to fully boot"
           echo "2. Go to Actions tab"
           echo "3. Run 'Deploy Application' workflow"
@@ -84,5 +84,5 @@ jobs:
       - name: Display Destroy Info
         if: github.event.inputs.action == 'destroy'
         run: |
-          echo "✅ Infrastructure destroyed successfully!"
+          echo "Infrastructure destroyed successfully!"
           echo "All AWS resources have been removed."
